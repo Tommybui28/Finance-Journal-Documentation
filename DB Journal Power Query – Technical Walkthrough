@@ -1,0 +1,1321 @@
+# DB Journal Power Query – Technical Walkthrough
+
+This document explains the **`DB Journal` Power Query** step by step in plain English, while still keeping the technical meaning intact.
+
+It is intended to help someone understand:
+
+- what the query is doing
+- how the Business Central journal is being built
+- where mismatches can happen
+- which parts are most important to maintain carefully
+
+---
+
+# 1. What this query does overall
+
+At a high level, this query takes **raw Daily Banking data from `Table1`**, cleans it, enriches it with lookup data, and then turns it into a **Business Central journal output**.
+
+It does four major things:
+
+1. **Loads and cleans source data**
+2. **Builds the finance posting fields** (dates, document numbers, dimensions, account codes)
+3. **Uses lookup tables** to map RE data into Business Central values
+4. **Creates balancing rows** so the journal can post as double-entry accounting
+
+So conceptually, the flow is:
+
+```text
+Excel Table1
+→ Type cleanup
+→ Text cleanup
+→ Derived columns
+→ Lookup merges (Fund / Department / VAT)
+→ BC journal fields
+→ Balancing bank rows
+→ Final journal layout
+```
+
+---
+
+# 2. Source and initial typing
+
+## Code
+
+```m
+Source = Excel.CurrentWorkbook(){[Name="Table1"]}[Content]
+```
+
+## What it means
+
+This loads data from the Excel table called **`Table1`** in the current workbook.
+
+That means this query is not pulling from an external file directly at this stage — it is reading from a workbook table that already exists in Excel.
+
+---
+
+## Code
+
+```m
+#"Changed Type" = Table.TransformColumnTypes(...)
+```
+
+## What it means
+
+This step assigns data types to the source columns.
+
+Examples:
+
+- dates become `type date`
+- amounts become `type number`
+- IDs become `text` or `Int64.Type`
+
+This is important because later steps depend on these data types being correct.
+
+### Why this matters
+
+If typing is wrong:
+
+- joins can fail
+- number calculations can fail
+- date formatting can behave inconsistently
+- Business Central output may be invalid
+
+### Important observation
+
+A few columns are typed as **integers**, such as:
+
+- `Gf_Reference`
+- `Gf_AttrCat_4_01_Description`
+- `Gf_CnBio_ID`
+
+That is fine **only if those values are always numeric**.
+If any of those ever contain mixed data, blanks, or non-numeric text, refreshes can fail.
+
+---
+
+# 3. Text trimming and cleaning
+
+## Code pattern
+
+```m
+#"Trimmed Text" = Table.TransformColumns(... Text.Trim ...)
+#"Cleaned Text" = Table.TransformColumns(... Text.Clean ...)
+```
+
+## What it means
+
+These two steps clean up text fields.
+
+### `Text.Trim`
+Removes leading and trailing spaces.
+
+Example:
+
+```text
+" Cash " → "Cash"
+```
+
+### `Text.Clean`
+Removes non-printable characters.
+
+This is useful when data has hidden characters from exports.
+
+### Why this matters
+
+This is a good defensive step because many lookup mismatches happen due to:
+
+- trailing spaces
+- copied hidden characters
+- inconsistent exported text
+
+### Important note
+
+You are trimming and cleaning many text columns, which is good.
+However, for lookup stability, you may also want to standardise case using `Text.Upper()` or `Text.Lower()` before merges.
+At the moment, this query does **not** do that.
+
+---
+
+# 4. Rename and derive core accounting dates/amounts
+
+## Rename posting date
+
+```m
+#"Renamed Columns" = Table.RenameColumns(#"Cleaned Text",{{"Gf_Date", "Posting Date"}})
+```
+
+This renames `Gf_Date` to **`Posting Date`**.
+
+That tells us that, in this model, **`Gf_Date` is being treated as the journal posting date**.
+
+---
+
+## Create signed amount
+
+```m
+#"Inserted Multiplication" = Table.AddColumn(#"Renamed Columns", "Amount", each [Gf_Amount] * -1, type number)
+```
+
+This creates a new `Amount` column by multiplying the original gift amount by **`-1`**.
+
+### What this means
+
+The source amount is being flipped in sign.
+
+Example:
+
+- `100` becomes `-100`
+- `-100` becomes `100`
+
+### Why this is probably being done
+
+This usually means the query wants the initial journal side to appear with an accounting sign convention, and the balancing row will reverse it later.
+
+### Risk
+
+If the source data already sometimes comes in negative, this can create unexpected sign issues. So this is one of the key places to validate when totals look wrong.
+
+---
+
+## Create document date
+
+```m
+#"Duplicated Column" = Table.AddColumn(#"Reordered Columns", "Document Date", each [Posting Date], type date)
+```
+
+This creates **`Document Date`** as a copy of **`Posting Date`**.
+
+So in this model:
+
+- Posting Date = business posting date
+- Document Date = same date for document purposes
+
+---
+
+# 5. Heavy reordering steps
+
+There are several `Table.ReorderColumns(...)` steps early in the query.
+
+## What they do
+
+These steps do **not change the data values**. They only change column order.
+
+## Why they exist
+
+Usually these are created by Power Query UI actions when someone drags columns around or inserts a new column and wants it placed visually in a certain part of the table.
+
+## Important maintenance note
+
+These steps make the query longer and harder to read, but they are not logically important unless later steps depend on visual column positions.
+
+### Optimisation note
+
+You could usually remove many of these reorder steps and keep only one final reorder near the end.
+That would make the query easier to maintain.
+
+---
+
+# 6. Document number logic
+
+This is one of the most important custom logic areas.
+
+## Code
+
+```m
+Cat4List = Table.Column(#"Reordered Columns2", "Gf_AttrCat_4_01_Description"),
+HasAnyCat4 = List.Count(List.Select(Cat4List, each _ <> null)) > 0,
+```
+
+## What it means
+
+This checks whether **any row** in the whole table has a non-null value in `Gf_AttrCat_4_01_Description`.
+
+So:
+
+- if at least one row anywhere has a Cat4 value, `HasAnyCat4 = true`
+- if no row has Cat4 populated, `HasAnyCat4 = false`
+
+---
+
+## Code
+
+```m
+#"Added Document No." =
+    Table.AddColumn(
+        #"Reordered Columns2",
+        "Document No.",
+        each
+            if HasAnyCat4 and [Gf_AttrCat_4_01_Description] <> null
+            then [Gf_AttrCat_4_01_Description]
+            else [Gf_Batch_Number],
+        Int64.Type
+    )
+```
+
+## What it means
+
+This creates **`Document No.`** using the following logic:
+
+- if the overall dataset contains any Cat4 values **and** the current row has a Cat4 value → use `Gf_AttrCat_4_01_Description`
+- otherwise → use `Gf_Batch_Number`
+
+### Business meaning
+
+The intended logic is likely:
+
+- prefer a more specific document number if Cat4 exists
+- otherwise fall back to batch number
+
+### Important subtlety
+
+This is a **hybrid dataset rule** because `HasAnyCat4` is evaluated across the whole table, not per row.
+
+That means the logic depends partly on:
+
+- the current row, and
+- whether any other row in the dataset has Cat4 populated
+
+### Why this matters
+
+This can produce inconsistent document numbering patterns in mixed datasets.
+
+A simpler row-level version would normally be:
+
+```m
+if [Gf_AttrCat_4_01_Description] <> null then [Gf_AttrCat_4_01_Description] else [Gf_Batch_Number]
+```
+
+That would be easier to reason about.
+
+---
+
+## Remove Cat4 after use
+
+```m
+#"Removed Cat4 Column" = Table.RemoveColumns(#"Added Document No.", {"Gf_AttrCat_4_01_Description"})
+```
+
+Once `Document No.` is built, the original Cat4 field is removed.
+
+That means from here onward, `Document No.` becomes the retained output field.
+
+---
+
+## External document number
+
+```m
+#"Duplicated Column1" = Table.AddColumn(#"Removed Cat4 Column", "External Document No.", each [#"Document No."], type number)
+```
+
+This duplicates `Document No.` into **`External Document No.`**.
+
+So at this point, both fields initially hold the same value.
+
+---
+
+# 7. Remove unnecessary source columns
+
+Several steps remove fields that are no longer needed after the journal fields are being built.
+
+Examples removed along the way include:
+
+- `Gf_AttrCat_3_01_Description`
+- `Gf_Agency`
+- `Gf_Markting_Sorc_Cod`
+- later many more source-specific columns
+
+## Why this is done
+
+This helps narrow the table down to only the journal-relevant fields.
+
+## Risk
+
+If a removed source field is later needed for troubleshooting, it becomes harder to audit where output values came from.
+
+A good practice is sometimes to keep a parallel audit/debug query that retains more source columns.
+
+---
+
+# 8. The `Index` field logic
+
+## Code
+
+```m
+#"Inserted Replaced Text" = Table.AddColumn(#"Reordered Columns5", "Index", each Text.Replace(Text.From([Posting Date], "en-GB"), "/09/2025", "09251000"), type text)
+```
+
+## What it means
+
+This creates an `Index` text field based on the formatted `Posting Date`.
+
+But it then does a **text replacement**:
+
+- it converts the date to text using `en-GB`
+- then replaces the substring `"/09/2025"` with `"09251000"`
+
+### Important point
+
+This is highly specific and hard-coded.
+
+### Why this is risky
+
+This logic only makes sense for a very particular date pattern.
+If the period changes, the output format may no longer be correct.
+
+For example, if the posting date is not in September 2025, this replacement will not behave as intended.
+
+### Likely purpose
+
+It looks like an attempt to build a custom import index string used by the downstream journal loader.
+
+### Recommendation
+
+This should ideally be replaced with explicit date formatting logic, for example:
+
+```m
+Date.ToText([Posting Date], "ddMMyy", "en-GB") & "1000"
+```
+
+which is much clearer and reusable.
+
+---
+
+# 9. Project Code and Appeal Code creation
+
+## Project Code
+
+```m
+#"Inserted Text Before Delimiter" = Table.AddColumn(#"Reordered Columns6", "Project Code", each Text.BeforeDelimiter([Gf_Apls_1_01_Ap_Appeal_category], " "), type text)
+```
+
+This takes the text before the first space from `Gf_Apls_1_01_Ap_Appeal_category`.
+
+### Example
+
+```text
+"PRJ Community Appeals" → "PRJ"
+```
+
+This means the project code is being derived from the first token in the appeal category text.
+
+### Risk
+
+If appeal category formatting changes, this logic can break or return the wrong project code.
+
+---
+
+## Appeal Code
+
+```m
+#"Inserted Text Range" = Table.AddColumn(#"Inserted Text Before Delimiter", "Appeal Code", each Text.Middle([Gf_Apls_1_01_Appeal_ID], 2, 4), type text)
+```
+
+This extracts 4 characters starting at position 2 from the appeal ID.
+
+### Example
+If `Gf_Apls_1_01_Appeal_ID = "A123456"`
+then `Appeal Code` becomes `1234`.
+
+### Risk
+
+This assumes a stable structure for the appeal ID.
+If appeal IDs are not consistently formatted, the derived code may be wrong.
+
+---
+
+# 10. Lookup merges
+
+This is a critical section, because this is where RE/source values are converted into Business Central values.
+
+---
+
+## 10.1 Fund lookup merge
+
+## Code
+
+```m
+#"Merged Queries" = Table.NestedJoin(#"Inserted Text Range", {"Gf_Fnds_1_01_Fn_Fund_category"}, #"Fund-PQ", {"RE Data Export Name"}, "Fund-PQ", JoinKind.LeftOuter),
+#"Expanded Fund-PQ" = Table.ExpandTableColumn(#"Merged Queries", "Fund-PQ", {"BC Fund"}, {"Fund-PQ.BC Fund"}),
+#"Renamed Columns2" = Table.RenameColumns(#"Removed Columns6",{{"Fund-PQ.BC Fund", "Fund Code"}})
+```
+
+## What it means
+
+This maps the RE fund category to the BC fund code.
+
+### Join rule
+
+- source key: `Gf_Fnds_1_01_Fn_Fund_category`
+- lookup key: `Fund-PQ[RE Data Export Name]`
+
+### Output
+
+`BC Fund` from the lookup becomes **`Fund Code`** in the journal.
+
+### Risk
+
+Possible mismatch causes:
+
+- source values don’t exactly match lookup values
+- lookup table has duplicate keys
+- missing fund categories produce null `Fund Code`
+
+---
+
+## 10. 2 Year code logic
+
+## Code
+
+```m
+#"Inserted Text Range1" = Table.AddColumn(#"Renamed Columns2", "Text Range", each Text.Middle([Gf_Apls_1_01_Appeal_ID], 6, 2), type text),
+#"Added Conditional Column" = Table.AddColumn(#"Inserted Text Range1", "Year Code", each if [Text Range] = "00" then "NA" else [Text Range], type text)
+```
+
+## What it means
+
+This extracts a 2-character year code from the appeal ID.
+
+If the extracted value is `"00"`, it gets replaced with `"NA"`.
+
+### Business meaning
+
+This suggests year information is embedded in the appeal ID.
+
+### Risk
+
+Again, this depends entirely on the appeal ID always following the same positional pattern.
+
+---
+
+## 10. 3 Document type
+
+```m
+#"Added Custom" = Table.AddColumn(#"Removed Columns7", "Document Type", each "PAYMENT")
+```
+
+This hardcodes **`Document Type = "PAYMENT"`** for all rows at this stage.
+
+That means all original rows are treated as payment lines before balancing logic later duplicates the journal.
+
+---
+
+## 10. 4 Department lookup
+
+## Code
+
+```m
+#"Merged Queries1" = Table.NestedJoin(#"Added Custom", {"Gf_Apls_1_01_ApAtrCat_2_01_Description"}, #"DEP-PQ", {"RE data export name"}, "DEP-PQ", JoinKind.LeftOuter),
+#"Expanded DEP-PQ" = Table.ExpandTableColumn(#"Merged Queries1", "DEP-PQ", {"BC Department Code"}, {"DEP-PQ.BC Department Code"}),
+#"Renamed Columns3" = Table.RenameColumns(#"Expanded DEP-PQ",{{"DEP-PQ.BC Department Code", "Department Code"}})
+```
+
+## What it means
+
+This maps a RE appeal attribute field to the BC department code.
+
+### Output
+
+The lookup value becomes **`Department Code`**.
+
+### Risk
+
+This join is especially important because if department mapping fails, journals may either reject in BC or post with incomplete dimensions.
+
+---
+
+## 10. 5 VAT / destination lookup used as Account No.
+
+## Code
+
+```m
+#"Merged Queries2" = Table.NestedJoin(#"Renamed Columns3", {"Gf_Gift_subtype"}, #"VAT-PQ", {"Gift Subtype"}, "VAT-PQ", JoinKind.LeftOuter),
+#"Expanded VAT-PQ" = Table.ExpandTableColumn(#"Merged Queries2", "VAT-PQ", {"BC Destination Code"}, {"VAT-PQ.BC Destination Code"}),
+#"Renamed Columns4" = Table.RenameColumns(#"Expanded VAT-PQ",{{"VAT-PQ.BC Destination Code", "Account No."}})
+```
+
+## What it means
+
+This uses gift subtype to look up a value called **`BC Destination Code`**, and then stores that in **`Account No.`**.
+
+### Important observation
+
+Although the lookup is named VAT-related, the result is being used as the **account number**.
+So in practice this lookup is defining which GL account the original line should post to.
+
+### Risk
+
+This is a key place where nulls or wrong mapping will directly produce wrong account posting.
+
+---
+
+# 11. Build BC accounting fields
+
+---
+
+## Balancing account placeholders
+
+```m
+#"Added Custom1" = Table.AddColumn(#"Removed Columns", "Bal. Account No.", each "null"),
+#"Added Custom2" = Table.AddColumn(#"Added Custom1", "Balance Account Type", each "G/L ACCOUNT"),
+#"Renamed Columns5" = Table.RenameColumns(#"Added Custom2",{{"Balance Account Type", "Bal. Account Type"}}),
+#"Added Custom3" = Table.AddColumn(#"Renamed Columns5", "Account Type", each "G/L ACCOUNT")
+```
+
+## What it means
+
+The query sets up standard BC journal columns:
+
+- `Bal. Account No.`
+- `Bal. Account Type`
+- `Account Type`
+
+At this stage:
+
+- `Account Type` is set to `G/L ACCOUNT`
+- `Bal. Account Type` is also initially `G/L ACCOUNT`
+- `Bal. Account No.` is filled with the literal text `"null"`
+
+### Important technical note
+
+This is **not the same as true null**.
+The text string `"null"` is a text value, not a blank.
+
+Later in the script, you correctly convert these balancing fields to true nulls.
+That later null cleanup is important because many importers treat the text `"null"` as invalid data.
+
+---
+
+## Description field
+
+```m
+#"Inserted Merged Column" = Table.AddColumn(#"Added Custom3", "Merged", each Text.Combine({[Gf_AttrCat_2_01_Description], " - ", Text.From([#"Document No."], "en-GB")}), type text),
+#"Renamed Columns6" = Table.RenameColumns(#"Inserted Merged Column",{{"Merged", "Description"}})
+```
+
+## What it means
+
+This builds the journal description as:
+
+```text
+[AttrCat2 Description] - [Document No.]
+```
+
+### Example
+
+```text
+"Daily Banking - 123456"
+```
+
+This description is later enhanced further for the balancing rows.
+
+---
+
+## Major Appeal Code
+
+```m
+#"Added Custom4" = Table.AddColumn(#"Removed Columns1", "Major Appeal Code", each "NA")
+```
+
+This hardcodes `Major Appeal Code = "NA"` for every row.
+
+So this is a required output field in the BC layout, but there is currently no dynamic source logic behind it.
+
+---
+
+# 12. Final pre-balancing layout
+
+At this stage the query narrows the data to a much cleaner BC-style shape including fields like:
+
+- Posting Date
+- Amount
+- Document Date
+- Document No.
+- Gf_CnBio_Name
+- Project Code
+- Appeal Code
+- Fund Code
+- Year Code
+- Document Type
+- Department Code
+- Account No.
+- Bal. Account No.
+- Bal. Account Type
+- Account Type
+- Description
+- Major Appeal Code
+
+This is effectively the **original journal line set** before balancing rows are created.
+
+---
+
+# 13. Parameter section
+
+This section is a good design feature.
+
+## Code
+
+```m
+AmountColName        = "Amount",
+AccountTypeColName   = "Account Type",
+AccountNoColName     = "Account No.",
+DescriptionColName   = "Description",
+GFBioNameColName     = "Gf_CnBio_Name",
+PostingDateColName   = "Posting Date",
+IndexColName         = "Index",
+
+MainAccountNumber    = "53472586 MAIN",
+MainAccountType      = "Bank Account",
+DescriptionSeparator = " - ",
+```
+
+## What it means
+
+These are effectively **configuration values** used later in the balancing logic.
+
+### Especially important
+
+- the main balancing bank account is hardcoded as **`53472586 MAIN`**
+- balancing rows will use `Account Type = Bank Account`
+- descriptions are joined using `" - "`
+
+### Why this is helpful
+
+This makes the balancing logic more readable because these names are referenced later rather than using repeated hardcoded strings everywhere.
+
+---
+
+# 14. Balancing row logic – the heart of the double-entry build
+
+This is the most important part of the query.
+
+The script does not just output the original journal lines.
+It also creates a **second copy** of those lines that act as the balancing bank entries.
+
+---
+
+## Start point
+
+```m
+Start = #"Renamed Columns7"
+```
+
+This means everything from here onward is working from the prepared journal-line dataset.
+
+---
+
+## Build helper description
+
+```m
+AddedNewDescription =
+    Table.AddColumn(
+        Start,
+        "NewDescription",
+        each
+            let
+                d = Text.Trim([Description]),
+                g = Text.Trim([Gf_CnBio_Name]),
+                parts = List.RemoveNulls({ if d <> "" then d else null, if g <> "" then g else null })
+            in
+                if List.Count(parts) = 0 then "" else Text.Combine(parts, DescriptionSeparator),
+        type text
+    )
+```
+
+## What it means
+
+This creates a helper field called `NewDescription`.
+
+It combines:
+
+- existing `Description`
+- `Gf_CnBio_Name`
+
+Only non-blank values are included.
+
+### Example
+
+If:
+
+- `Description = "Daily Banking - 12345"`
+- `Gf_CnBio_Name = "Jane Smith"`
+
+then `NewDescription` becomes:
+
+```text
+Daily Banking - 12345 - Jane Smith
+```
+
+### Why this is used
+
+It gives the **balancing bank rows** a richer description than the originals.
+
+---
+
+## Create balancing copy
+
+```m
+BalancingBase =
+    Table.TransformColumns(
+        AddedNewDescription,
+        {
+            {AmountColName,      each if _ = null then null else -_, type number},
+            {AccountTypeColName, each MainAccountType,                type text},
+            {AccountNoColName,   each MainAccountNumber,              type text}
+        }
+    )
+```
+
+## What it means
+
+This creates the balancing version of the rows by changing three things:
+
+1. **Amount** is negated
+2. **Account Type** becomes `Bank Account`
+3. **Account No.** becomes `53472586 MAIN`
+
+### Business meaning
+
+That means the original row posts to the mapped GL account, and the balancing row posts to the bank account.
+
+This is the core double-entry logic.
+
+### Example
+
+Original row:
+
+- Amount = `-100`
+- Account Type = `G/L ACCOUNT`
+- Account No. = `income/destination account`
+
+Balancing row:
+
+- Amount = `100`
+- Account Type = `Bank Account`
+- Account No. = `53472586 MAIN`
+
+Together, they balance.
+
+---
+
+## Replace description on balancing rows
+
+```m
+BalancingRows0 =
+    Table.RenameColumns(
+        Table.RemoveColumns(BalancingBase, {DescriptionColName}),
+        {{"NewDescription", DescriptionColName}}
+    )
+```
+
+This removes the old `Description` from the balancing rows and replaces it with `NewDescription`.
+
+So balancing rows keep the donor name where available.
+
+---
+
+## Ensure balancing columns exist
+
+```m
+BalancingRowsEnsure =
+    let
+        t1 = if Table.HasColumns(BalancingRows0, "Bal. Account Type")
+             then BalancingRows0
+             else Table.AddColumn(BalancingRows0, "Bal. Account Type", each null, type text),
+        t2 = if Table.HasColumns(t1, "Bal. Account No.")
+             then t1
+             else Table.AddColumn(t1, "Bal. Account No.", each null, type text)
+    in
+        t2
+```
+
+## What it means
+
+This is a defensive step.
+It makes sure both balancing columns exist, even if earlier query changes removed them.
+
+This makes the query more robust.
+
+---
+
+## Force balancing fields to true blanks
+
+```m
+BalancingRowsSetBalBlank =
+    Table.TransformColumns(
+        BalancingRowsEnsure,
+        {
+            {"Bal. Account Type", each null, type any},
+            {"Bal. Account No.",  each null, type any}
+        }
+    )
+```
+
+## What it means
+
+This overwrites both balancing fields and makes them true `null` values.
+
+### Important comment in your query
+
+You note this is required by the **TES importer**.
+
+That means the importer expects these fields to be blank, not literal text and not populated references.
+
+This is an important integration-specific requirement.
+
+---
+
+## Rebuild index for balancing rows
+
+```m
+BalancingRowsWithIndex =
+    let
+        prep = if Table.HasColumns(BalancingRowsSetBalBlank, IndexColName)
+               then Table.RemoveColumns(BalancingRowsSetBalBlank, {IndexColName})
+               else BalancingRowsSetBalBlank
+    in
+        Table.AddColumn(
+            prep,
+            IndexColName,
+            each Date.ToText([Posting Date], "ddMMyy", "en-GB") & "5000",
+            type text
+        )
+```
+
+## What it means
+
+For balancing rows, a new `Index` is created using:
+
+```text
+ddMMyy + 5000
+```
+
+### Example
+
+If posting date is 9 June 2026:
+
+```text
+0906265000
+```
+
+### Why this is better than the earlier index logic
+
+This is explicit and repeatable.
+It is much clearer than the earlier `Text.Replace` approach.
+
+### Observation
+
+The balancing rows and original rows are using different index-generation logic, which may be intentional for import ordering.
+
+---
+
+# 15. Original rows cleanup before combining
+
+## Code
+
+```m
+OriginalRowsRaw = Table.RemoveColumns(AddedNewDescription, {"NewDescription"})
+```
+
+This removes the temporary helper column from the original rows.
+
+Then:
+
+```m
+OriginalRowsEnsure = ...
+OriginalRowsBalBlank = Table.TransformColumns(... Bal. Account Type / Bal. Account No. => null ...)
+```
+
+## What it means
+
+Even the original rows are forced to have blank balancing fields.
+
+### Why
+
+Again, your comment explains this is required by the TES importer.
+
+So the journal is designed so that:
+
+- original lines carry account posting info
+- balancing columns themselves remain blank in the import layout
+
+---
+
+# 16. Combine original + balancing rows
+
+## Code
+
+```m
+Output = Table.Combine({OriginalRowsBalBlank, BalancingRowsWithIndex})
+```
+
+## What it means
+
+This stacks the two row sets together.
+
+So the final journal now contains:
+
+1. original rows
+2. balancing bank rows
+
+This is the point where the journal becomes a full double-entry set.
+
+---
+
+## Remove zero rows
+
+```m
+Output_NoZero = Table.SelectRows(Output, each [Amount] <> 0 and [Amount] <> null)
+```
+
+This removes:
+
+- zero amount rows
+- null amount rows
+
+That is a good safety check to avoid junk lines in the BC import.
+
+---
+
+# 17. Final output shaping
+
+The remaining steps are mostly about shaping the output into the exact Business Central / importer layout.
+
+These include:
+
+- removing helper/source columns
+- final column order changes
+- adding line numbers
+- re-adding `External Document No.`
+- inserting `Currency`
+- renaming placeholders
+
+---
+
+## Remove donor name
+
+```m
+#"Removed Columns3" = Table.RemoveColumns(Output_NoZero,{"Gf_CnBio_Name"})
+```
+
+After donor name has already been used to enrich balancing descriptions, it is no longer needed in the final output.
+
+---
+
+## Add line number
+
+```m
+#"Added Index" = Table.AddIndexColumn(#"Renamed Columns8", "Index.1", 0, 1, Int64.Type)
+#"Renamed Columns9" = Table.RenameColumns(#"Reordered Columns11",{{"Index.1", "Line No."}})
+```
+
+This creates a sequential **`Line No.`** column starting at 0.
+
+### Business meaning
+
+This is likely required by the target journal import format to uniquely order or identify rows.
+
+---
+
+## Recreate external document no.
+
+```m
+#"Duplicated Column2" = Table.AddColumn(#"Reordered Columns12", "External Document No.", each [#"Document No."], type number)
+```
+
+The query earlier created this field, but because of transformations/removals, it is created again here in the final layout.
+
+---
+
+## Add Break column then replace as Document Type
+
+```m
+#"Added Custom7" = Table.AddColumn(#"Removed Columns10", "Break", each "null")
+#"Removed Columns8" = Table.RemoveColumns(#"Reordered Columns10",{"Document Type"})
+#"Renamed Columns8" = Table.RenameColumns(#"Removed Columns8",{{"replaceCustom", "Document Type"}})
+```
+
+## What this means
+
+This section appears to be restructuring the column layout so that `Document Type` ends up in the required position, but it actually replaces it with a new blank/null-style column.
+
+### Important observation
+
+Earlier, `Document Type` was hardcoded as `PAYMENT`.
+Later, the query removes the original `Document Type` and replaces it using `replaceCustom`, which is created as:
+
+```m
+#"Added Custom6" = Table.AddColumn(#"Reordered Columns9", "replaceCustom", each null)
+```
+
+So the final output `Document Type` is actually **null for every row**.
+
+### This is a very important behavioural point
+
+Even though `Document Type` is initially set to `PAYMENT`, the final output removes that value and replaces it with blank/null.
+
+If this was not intentional, it could be a source of confusion or mismatch.
+If it *was* intentional for the importer, then the code is correct but slightly misleading because the earlier constant `PAYMENT` never survives to the final output.
+
+---
+
+## Currency column
+
+```m
+#"Duplicated Column3" = Table.DuplicateColumn(#"Reordered Columns14", "Document Type", "Document Type - Copy")
+#"Renamed Columns1" = Table.RenameColumns(#"Removed Columns11",{{"Document Type - Copy", "Currency"}})
+```
+
+## What it means
+
+The final `Currency` column is simply a duplicate of the final `Document Type` column.
+
+Because final `Document Type` has been replaced with null, this means **`Currency` will also be null**.
+
+### Important implication
+
+If the importer expects blank currency, that is fine.
+If the importer expects something like `GBP`, this would be a problem.
+
+This is another area worth validating in live output.
+
+---
+
+# 18. Final output columns
+
+The query ends by returning:
+
+```m
+in
+    #"Renamed Columns1"
+```
+
+So the final exported journal includes columns such as:
+
+- Posting Date
+- Amount
+- Document Date
+- Document No.
+- External Document No.
+- Line No.
+- Currency
+- Project Code
+- Appeal Code
+- Fund Code
+- Year Code
+- Document Type
+- Department Code
+- Account No.
+- Bal. Account No.
+- Bal. Account Type
+- Account Type
+- Description
+- Major Appeal Code
+
+This is the final BC/import-ready output.
+
+---
+
+# 19. Most important logic areas in this query
+
+If someone is maintaining this query, these are the most important areas to understand.
+
+## A. Amount sign logic
+
+```m
+Amount = [Gf_Amount] * -1
+```
+
+This defines the direction of the original rows.
+The balancing rows then reverse it.
+
+If totals are wrong, check this first.
+
+---
+
+## B. Document number logic
+
+```m
+if HasAnyCat4 and [Gf_AttrCat_4_01_Description] <> null
+then [Gf_AttrCat_4_01_Description]
+else [Gf_Batch_Number]
+```
+
+This controls document numbering and may behave unexpectedly in mixed datasets because `HasAnyCat4` is table-level, not row-level.
+
+---
+
+## C. Lookup joins
+
+These three joins drive the BC dimensions/accounts:
+
+- Fund lookup → `Fund Code`
+- Department lookup → `Department Code`
+- VAT lookup → `Account No.`
+
+If any of those fail, your journal can be incomplete or wrong.
+
+---
+
+## D. Balancing row creation
+
+This is the double-entry engine:
+
+- copies all original rows
+- negates amount
+- swaps account to bank account `53472586 MAIN`
+- updates description
+
+Without this, the journal would not balance.
+
+---
+
+## E. Final blanking of fields
+
+A lot of fields are deliberately made true nulls for importer compatibility:
+
+- `Bal. Account Type`
+- `Bal. Account No.`
+- final `Document Type`
+- final `Currency`
+
+This is important because the workbook may appear to create values earlier that do not survive to the final output.
+
+---
+
+# 20. Likely mismatch / maintenance risks in this query
+
+Here are the biggest technical risks.
+
+## 1. Hardcoded date-specific index logic
+
+```m
+Text.Replace(Text.From([Posting Date], "en-GB"), "/09/2025", "09251000")
+```
+
+This is brittle and period-specific.
+
+---
+
+## 2. Table-level `HasAnyCat4`
+
+This means document numbering can vary depending on whether *any row* in the dataset has Cat4, not just the current row.
+
+---
+
+## 3. Lookup joins not normalised enough
+
+You trim and clean text, which is good, but you do not standardise case before merges.
+That means `cash`, `Cash`, and `CASH` are still different values.
+
+---
+
+## 4. Position-based parsing of appeal fields
+
+These steps assume fixed string formats:
+
+- `Text.Middle(..., 2, 4)`
+- `Text.Middle(..., 6, 2)`
+- `Text.BeforeDelimiter(..., " ")`
+
+If source formatting changes, codes can break silently.
+
+---
+
+## 5. `Document Type` and `Currency` are blank in final output
+
+This may be intentional for the importer, but technically it means the earlier `PAYMENT` assignment is not present in the final dataset.
+
+---
+
+## 6. Too many reorder steps
+
+These do not break the query, but they make it much harder to read and maintain.
+
+---
+
+# 21. Suggested refactor approach
+
+If you ever want to simplify this query, a cleaner structure would be:
+
+```text
+1. Source
+2. Type cleanup
+3. Text cleanup
+4. Core derived fields (Posting Date, Amount, Document No.)
+5. Lookup merges (Fund / Department / Account)
+6. BC journal base rows
+7. Balancing bank rows
+8. Combine rows
+9. Final output shaping
+```
+
+That would make the logic much easier to explain and troubleshoot.
+
+---
+
+# 22. Plain-English summary
+
+In simple terms, this query does the following:
+
+1. Reads Daily Banking source data from Excel
+2. Cleans dates, numbers, and text
+3. Converts gift data into Business Central-friendly fields
+4. Looks up Finance mappings such as fund, department, and account
+5. Creates the original journal rows
+6. Makes a second balancing copy of those rows for the bank account
+7. Combines both sets together into a double-entry journal
+8. Shapes the result into the exact import layout required by Business Central / TES
+
+---
+
+# 23. One-line summary for documentation
+
+> The `DB Journal` query takes cleaned Daily Banking source data, maps it to Business Central dimensions and account codes, generates balancing bank lines, and returns a final import-ready double-entry journal.
+
+---
+
+# 24. Recommended follow-up checks
+
+If you want to improve reliability, I would suggest checking these next:
+
+## Check 1 – unmapped lookup rows
+Create exception queries for:
+
+- missing Fund Code
+- missing Department Code
+- missing Account No.
+
+## Check 2 – duplicate lookup keys
+Especially in:
+
+- `Fund-PQ`
+- `DEP-PQ`
+- `VAT-PQ`
+
+## Check 3 – final totals
+Validate:
+
+```text
+Total original rows amount + total balancing rows amount = 0
+```
+
+## Check 4 – final Document Type / Currency behaviour
+Confirm whether blanks are genuinely required by the importer.
+
+## Check 5 – replace the hardcoded index logic
+The earlier original-row `Index` logic should be rewritten into a reusable date-based formula.
+
+---
+The query is doing four main jobs: source cleanup, lookup enrichment, Business Central field construction, and creation of balancing bank rows.
+
+The balancing row logic is the heart of the model — it duplicates the original rows, flips the sign on Amount, and switches the posting to the hardcoded bank account 53472586 MAIN.
+
+One important thing I spotted: Document Type is initially set to PAYMENT, but later gets replaced with null, and then Currency is duplicated from that null field — so both end up blank in the final output.
+
+Another likely maintenance risk is this hardcoded logic:
+
+the original Index uses a date text replacement specifically for /09/2025
+which makes it quite brittle for future periods.
+
+
+I also flagged that your Document No. logic uses table-level logic (HasAnyCat4) rather than purely row-level logic, which could cause unexpected behaviour in mixed datasets.
