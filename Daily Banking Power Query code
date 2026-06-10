@@ -1,0 +1,213 @@
+let
+    Source = Excel.CurrentWorkbook(){[Name="Table1"]}[Content],
+    #"Changed Type" = Table.TransformColumnTypes(Source,{{"Gf_Type", type text}, {"Gf_Date", type date}, {"Gf_Gift_subtype", type text}, {"Gf_Amount", type number}, {"Gf_Pay_method", type text}, {"Gf_Batch_Number", Int64.Type}, {"Gf_Reference", Int64.Type}, {"Gf_DateAdded", type date}, {"Gf_Reference_number", type text}, {"Gf_Gift_code", type text}, {"Gf_NL_post_date", type date}, {"Gf_Import_ID", type text}, {"Gf_Gift_ID", type text}, {"Gf_NL_post_status", type text}, {"Gf_Markting_Sorc_Cod", type text}, {"Gf_Agency", type text}, {"Gf_AttrCat_1_01_Description", type text}, {"Gf_AttrCat_2_01_Description", type text}, {"Gf_AttrCat_3_01_Description", type text}, {"Gf_AttrCat_4_01_Description", Int64.Type}, {"Gf_CnBio_ID", Int64.Type}, {"Gf_CnBio_Name", type text}, {"Gf_Fnds_1_01_Description", type text}, {"Gf_Fnds_1_01_Fn_Restricted", type text}, {"Gf_Fnds_1_01_Fn_Fund_category", type text}, {"Gf_Fnds_1_01_Fn_Fund_type", type text}, {"Gf_Apls_1_01_Appeal_ID", type text}, {"Gf_Apls_1_01_Description", type text}, {"Gf_Apls_1_01_Ap_Appeal_category", type text}, {"Gf_Apls_1_01_ApAtrCat_1_01_Description", Int64.Type}, {"Gf_Apls_1_01_ApAtrCat_2_01_Description", type text}}),
+    #"Trimmed Text" = Table.TransformColumns(#"Changed Type",{{"Gf_Type", Text.Trim, type text}, {"Gf_Gift_subtype", Text.Trim, type text}, {"Gf_Pay_method", Text.Trim, type text}, {"Gf_Reference_number", Text.Trim, type text}, {"Gf_Gift_code", Text.Trim, type text}, {"Gf_Import_ID", Text.Trim, type text}, {"Gf_Gift_ID", Text.Trim, type text}, {"Gf_NL_post_status", Text.Trim, type text}, {"Gf_Markting_Sorc_Cod", Text.Trim, type text}, {"Gf_Agency", Text.Trim, type text}, {"Gf_AttrCat_1_01_Description", Text.Trim, type text}, {"Gf_AttrCat_2_01_Description", Text.Trim, type text}, {"Gf_AttrCat_3_01_Description", Text.Trim, type text}, {"Gf_CnBio_Name", Text.Trim, type text}, {"Gf_Fnds_1_01_Description", Text.Trim, type text}, {"Gf_Fnds_1_01_Fn_Restricted", Text.Trim, type text}, {"Gf_Fnds_1_01_Fn_Fund_category", Text.Trim, type text}, {"Gf_Fnds_1_01_Fn_Fund_type", Text.Trim, type text}, {"Gf_Apls_1_01_Ap_Appeal_category", Text.Trim, type text}, {"Gf_Apls_1_01_Description", Text.Trim, type text}, {"Gf_Apls_1_01_Appeal_ID", Text.Trim, type text}, {"Gf_Apls_1_01_ApAtrCat_2_01_Description", Text.Trim, type text}}),
+    #"Cleaned Text" = Table.TransformColumns(#"Trimmed Text",{{"Gf_Type", Text.Clean, type text}, {"Gf_Gift_subtype", Text.Clean, type text}, {"Gf_Pay_method", Text.Clean, type text}, {"Gf_Reference_number", Text.Clean, type text}, {"Gf_Gift_code", Text.Clean, type text}, {"Gf_Import_ID", Text.Clean, type text}, {"Gf_Gift_ID", Text.Clean, type text}, {"Gf_NL_post_status", Text.Clean, type text}, {"Gf_Markting_Sorc_Cod", Text.Clean, type text}, {"Gf_Agency", Text.Clean, type text}, {"Gf_AttrCat_1_01_Description", Text.Clean, type text}, {"Gf_AttrCat_2_01_Description", Text.Clean, type text}, {"Gf_AttrCat_3_01_Description", Text.Clean, type text}, {"Gf_CnBio_Name", Text.Clean, type text}, {"Gf_Fnds_1_01_Description", Text.Clean, type text}, {"Gf_Fnds_1_01_Fn_Restricted", Text.Clean, type text}, {"Gf_Fnds_1_01_Fn_Fund_category", Text.Clean, type text}, {"Gf_Fnds_1_01_Fn_Fund_type", Text.Clean, type text}, {"Gf_Apls_1_01_Ap_Appeal_category", Text.Clean, type text}, {"Gf_Apls_1_01_Description", Text.Clean, type text}, {"Gf_Apls_1_01_Appeal_ID", Text.Clean, type text}, {"Gf_Apls_1_01_ApAtrCat_2_01_Description", Text.Clean, type text}}),
+    #"Renamed Columns" = Table.RenameColumns(#"Cleaned Text",{{"Gf_Date", "Posting Date"}}),
+    #"Inserted Multiplication" = Table.AddColumn(#"Renamed Columns", "Amount", each [Gf_Amount] * -1, type number),
+    #"Reordered Columns" = Table.ReorderColumns(#"Inserted Multiplication",{"Posting Date", "Amount", "Gf_Gift_subtype", "Gf_Amount", "Gf_Pay_method", "Gf_Batch_Number", "Gf_Reference", "Gf_DateAdded", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_Gift_ID", "Gf_NL_post_status", "Gf_Markting_Sorc_Cod", "Gf_Agency", "Gf_AttrCat_1_01_Description", "Gf_AttrCat_2_01_Description", "Gf_AttrCat_3_01_Description", "Gf_AttrCat_4_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "Gf_Fnds_1_01_Fn_Restricted", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
+    #"Duplicated Column" = Table.AddColumn(#"Reordered Columns", "Document Date", each [Posting Date], type date),
+    #"Reordered Columns1" = Table.ReorderColumns(#"Duplicated Column",{"Posting Date", "Amount", "Gf_Gift_subtype", "Gf_Amount", "Document Date", "Gf_Pay_method", "Gf_Batch_Number", "Gf_Reference", "Gf_DateAdded", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_Gift_ID", "Gf_NL_post_status", "Gf_Markting_Sorc_Cod", "Gf_Agency", "Gf_AttrCat_1_01_Description", "Gf_AttrCat_2_01_Description", "Gf_AttrCat_3_01_Description", "Gf_AttrCat_4_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "Gf_Fnds_1_01_Fn_Restricted", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
+    #"Reordered Columns2" = Table.ReorderColumns(#"Reordered Columns1",{"Posting Date", "Amount", "Document Date", "Gf_AttrCat_4_01_Description", "Gf_Gift_subtype", "Gf_Pay_method", "Gf_Batch_Number", "Gf_Reference", "Gf_DateAdded", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_Gift_ID", "Gf_NL_post_status", "Gf_Markting_Sorc_Cod", "Gf_Agency", "Gf_AttrCat_1_01_Description", "Gf_AttrCat_2_01_Description", "Gf_AttrCat_3_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "Gf_Fnds_1_01_Fn_Restricted", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
+ 
+ // --- Document No logic (Option B) ---
+    Cat4List = Table.Column(#"Reordered Columns2", "Gf_AttrCat_4_01_Description"),
+    HasAnyCat4 = List.Count(List.Select(Cat4List, each _ <> null)) > 0,
+
+    #"Added Document No." =
+        Table.AddColumn(
+            #"Reordered Columns2",
+            "Document No.",
+            each
+                if HasAnyCat4 and [Gf_AttrCat_4_01_Description] <> null
+                then [Gf_AttrCat_4_01_Description]
+                else [Gf_Batch_Number],
+            Int64.Type
+        ),
+
+    #"Removed Cat4 Column" =
+        Table.RemoveColumns(#"Added Document No.", {"Gf_AttrCat_4_01_Description"}),
+
+
+
+#"Duplicated Column1" = Table.AddColumn(#"Removed Cat4 Column", "External Document No.", each [#"Document No."], type number),
+
+
+
+    #"Reordered Columns3" = Table.ReorderColumns(#"Duplicated Column1",{"Posting Date", "Amount", "Document Date", "Document No.", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_Gift_ID", "Gf_NL_post_status", "Gf_Markting_Sorc_Cod", "Gf_Agency", "Gf_AttrCat_1_01_Description", "Gf_AttrCat_2_01_Description", "Gf_AttrCat_3_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "External Document No.", "Gf_Fnds_1_01_Fn_Restricted", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
+    #"Reordered Columns4" = Table.ReorderColumns(#"Reordered Columns3",{"Posting Date", "Amount", "Document Date", "Document No.", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_Gift_ID", "Gf_NL_post_status", "Gf_Markting_Sorc_Cod", "Gf_Agency", "Gf_AttrCat_1_01_Description", "External Document No.", "Gf_AttrCat_2_01_Description", "Gf_AttrCat_3_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
+    #"Removed Columns4" = Table.RemoveColumns(#"Reordered Columns4",{"Gf_AttrCat_3_01_Description", "Gf_Agency", "Gf_Markting_Sorc_Cod", "Gf_Gift_ID", "Gf_NL_post_status"}),
+    #"Reordered Columns5" = Table.ReorderColumns(#"Removed Columns4",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_AttrCat_1_01_Description", "Gf_AttrCat_2_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
+    #"Inserted Replaced Text" = Table.AddColumn(#"Reordered Columns5", "Index", each Text.Replace(Text.From([Posting Date], "en-GB"), "/09/2025", "09251000"), type text),
+    #"Reordered Columns6" = Table.ReorderColumns(#"Inserted Replaced Text",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_AttrCat_1_01_Description", "Gf_AttrCat_2_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
+    #"Inserted Text Before Delimiter" = Table.AddColumn(#"Reordered Columns6", "Project Code", each Text.BeforeDelimiter([Gf_Apls_1_01_Ap_Appeal_category], " "), type text),
+    #"Inserted Text Range" = Table.AddColumn(#"Inserted Text Before Delimiter", "Appeal Code", each Text.Middle([Gf_Apls_1_01_Appeal_ID], 2, 4), type text),
+    #"Merged Queries" = Table.NestedJoin(#"Inserted Text Range", {"Gf_Fnds_1_01_Fn_Fund_category"}, #"Fund-PQ", {"RE Data Export Name"}, "Fund-PQ", JoinKind.LeftOuter),
+    #"Expanded Fund-PQ" = Table.ExpandTableColumn(#"Merged Queries", "Fund-PQ", {"BC Fund"}, {"Fund-PQ.BC Fund"}),
+    #"Removed Columns6" = Table.RemoveColumns(#"Expanded Fund-PQ",{"Gf_Fnds_1_01_Fn_Fund_type", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Description"}),
+    #"Renamed Columns2" = Table.RenameColumns(#"Removed Columns6",{{"Fund-PQ.BC Fund", "Fund Code"}}),
+    #"Inserted Text Range1" = Table.AddColumn(#"Renamed Columns2", "Text Range", each Text.Middle([Gf_Apls_1_01_Appeal_ID], 6, 2), type text),
+    #"Added Conditional Column" = Table.AddColumn(#"Inserted Text Range1", "Year Code", each if [Text Range] = "00" then "NA" else [Text Range], type text),
+    #"Removed Columns7" = Table.RemoveColumns(#"Added Conditional Column",{"Text Range"}),
+    #"Added Custom" = Table.AddColumn(#"Removed Columns7", "Document Type", each "PAYMENT"),
+    #"Merged Queries1" = Table.NestedJoin(#"Added Custom", {"Gf_Apls_1_01_ApAtrCat_2_01_Description"}, #"DEP-PQ", {"RE data export name"}, "DEP-PQ", JoinKind.LeftOuter),
+    #"Expanded DEP-PQ" = Table.ExpandTableColumn(#"Merged Queries1", "DEP-PQ", {"BC Department Code"}, {"DEP-PQ.BC Department Code"}),
+    #"Renamed Columns3" = Table.RenameColumns(#"Expanded DEP-PQ",{{"DEP-PQ.BC Department Code", "Department Code"}}),
+    #"Merged Queries2" = Table.NestedJoin(#"Renamed Columns3", {"Gf_Gift_subtype"}, #"VAT-PQ", {"Gift Subtype"}, "VAT-PQ", JoinKind.LeftOuter),
+    #"Expanded VAT-PQ" = Table.ExpandTableColumn(#"Merged Queries2", "VAT-PQ", {"BC Destination Code"}, {"VAT-PQ.BC Destination Code"}),
+    #"Renamed Columns4" = Table.RenameColumns(#"Expanded VAT-PQ",{{"VAT-PQ.BC Destination Code", "Account No."}}),
+    #"Removed Columns" = Table.RemoveColumns(#"Renamed Columns4",{"Gf_Apls_1_01_ApAtrCat_2_01_Description", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category"}),
+    #"Added Custom1" = Table.AddColumn(#"Removed Columns", "Bal. Account No.", each "null"),
+    #"Added Custom2" = Table.AddColumn(#"Added Custom1", "Balance Account Type", each "G/L ACCOUNT"),
+    #"Renamed Columns5" = Table.RenameColumns(#"Added Custom2",{{"Balance Account Type", "Bal. Account Type"}}),
+    #"Added Custom3" = Table.AddColumn(#"Renamed Columns5", "Account Type", each "G/L ACCOUNT"),
+    #"Inserted Merged Column" = Table.AddColumn(#"Added Custom3", "Merged", each Text.Combine({[Gf_AttrCat_2_01_Description], " - ", Text.From([#"Document No."], "en-GB")}), type text),
+    #"Renamed Columns6" = Table.RenameColumns(#"Inserted Merged Column",{{"Merged", "Description"}}),
+    #"Added Custom4" = Table.AddColumn(#"Renamed Columns6", "Major Appeal Code", each "NA"),
+    #"Removed Columns1" = Table.RemoveColumns(#"Added Custom4",{"Gf_Apls_1_01_Description", "Gf_Apls_1_01_Appeal_ID", "Gf_Fnds_1_01_Fn_Restricted", "Gf_CnBio_ID", "Gf_AttrCat_2_01_Description", "Gf_AttrCat_1_01_Description", "Gf_Import_ID", "Gf_NL_post_date", "Gf_Gift_code", "Gf_Reference_number", "Gf_DateAdded", "Gf_Reference", "Gf_Type", "Gf_Amount", "Gf_Gift_subtype", "Gf_Pay_method"}),
+    #"Added Custom5" = Table.AddColumn(#"Removed Columns1", "Custom", each "BANK ACCOUNT"),
+    #"Removed Columns2" = Table.RemoveColumns(#"Added Custom5",{"Bal. Account Type"}),
+    #"Reordered Columns7" = Table.ReorderColumns(#"Removed Columns2",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Gf_CnBio_Name", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Custom", "Account Type", "Description", "Major Appeal Code"}),
+    #"Renamed Columns7" = Table.RenameColumns(#"Reordered Columns7",{{"Custom", "Bal. Account Type"}}),
+// ========= PARAMETERS =========
+AmountColName        = "Amount",
+AccountTypeColName   = "Account Type",
+AccountNoColName     = "Account No.",
+DescriptionColName   = "Description",
+GFBioNameColName     = "Gf_CnBio_Name",
+PostingDateColName   = "Posting Date",
+IndexColName         = "Index",
+
+// Main bank for the balancing line (goes in the main Account fields)
+MainAccountNumber    = "53472586 MAIN",
+MainAccountType      = "Bank Account",
+DescriptionSeparator = " - ",
+
+// ========= START FROM LAST STEP =========
+Start = #"Renamed Columns7",
+
+// Build helper: Description + CnBio (skip blanks)
+AddedNewDescription =
+    Table.AddColumn(
+        Start,
+        "NewDescription",
+        each
+            let
+                d = Text.Trim([Description]),
+                g = Text.Trim([Gf_CnBio_Name]),
+                parts = List.RemoveNulls({ if d <> "" then d else null, if g <> "" then g else null })
+            in
+                if List.Count(parts) = 0 then "" else Text.Combine(parts, DescriptionSeparator),
+        type text
+    ),
+
+// Create balancing copy: negate amount + set main Account fields to the bank
+BalancingBase =
+    Table.TransformColumns(
+        AddedNewDescription,
+        {
+            {AmountColName,      each if _ = null then null else -_, type number},
+            {AccountTypeColName, each MainAccountType,                type text},
+            {AccountNoColName,   each MainAccountNumber,              type text}
+        }
+    ),
+
+// Use NewDescription as Description on the balancing rows
+BalancingRows0 =
+    Table.RenameColumns(
+        Table.RemoveColumns(BalancingBase, {DescriptionColName}),
+        {{"NewDescription", DescriptionColName}}
+    ),
+
+// Ensure the two Bal. fields exist (if not already present)
+BalancingRowsEnsure =
+    let
+        t1 = if Table.HasColumns(BalancingRows0, "Bal. Account Type")
+             then BalancingRows0
+             else Table.AddColumn(BalancingRows0, "Bal. Account Type", each null, type text),
+        t2 = if Table.HasColumns(t1, "Bal. Account No.")
+             then t1
+             else Table.AddColumn(t1, "Bal. Account No.", each null, type text)
+    in
+        t2,
+
+// TES importer requirement: BOTH Bal. fields must be BLANK (true null)
+BalancingRowsSetBalBlank =
+    Table.TransformColumns(
+        BalancingRowsEnsure,
+        {
+            {"Bal. Account Type", each null, type any},
+            {"Bal. Account No.",  each null, type any}
+        }
+    ),
+
+// Build/replace Index for balancing rows only: ddMMyy & "5000"
+BalancingRowsWithIndex =
+    let
+        prep = if Table.HasColumns(BalancingRowsSetBalBlank, IndexColName)
+               then Table.RemoveColumns(BalancingRowsSetBalBlank, {IndexColName})
+               else BalancingRowsSetBalBlank
+    in
+        Table.AddColumn(
+            prep,
+            IndexColName,
+            each Date.ToText([Posting Date], "ddMMyy", "en-GB") & "5000",
+            type text
+        ),
+
+// ORIGINAL ROWS: keep original Description, drop helper
+OriginalRowsRaw = Table.RemoveColumns(AddedNewDescription, {"NewDescription"}),
+
+// Also make BOTH Bal. fields BLANK on originals (TES importer will otherwise validate them)
+OriginalRowsEnsure =
+    let
+        o1 = if Table.HasColumns(OriginalRowsRaw, "Bal. Account Type")
+             then OriginalRowsRaw
+             else Table.AddColumn(OriginalRowsRaw, "Bal. Account Type", each null, type text),
+        o2 = if Table.HasColumns(o1, "Bal. Account No.")
+             then o1
+             else Table.AddColumn(o1, "Bal. Account No.", each null, type text)
+    in
+        o2,
+
+OriginalRowsBalBlank =
+    Table.TransformColumns(
+        OriginalRowsEnsure,
+        {
+            // Clean up any literal "null" text and ensure true blanks
+            {"Bal. Account Type", each null, type any},
+            {"Bal. Account No.",  each null, type any}
+        }
+    ),
+
+// Combine originals + balancing
+Output =
+    Table.Combine({OriginalRowsBalBlank, BalancingRowsWithIndex}),
+
+// Remove zero-amount rows
+Output_NoZero =
+    Table.SelectRows(Output, each [Amount] <> 0 and [Amount] <> null),
+    #"Removed Columns3" = Table.RemoveColumns(Output_NoZero,{"Gf_CnBio_Name"}),
+    #"Reordered Columns8" = Table.ReorderColumns(#"Removed Columns3",{"Index", "Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+    #"Removed Columns5" = Table.RemoveColumns(#"Reordered Columns8",{"External Document No."}),
+    #"Reordered Columns9" = Table.ReorderColumns(#"Removed Columns5",{"Index", "Posting Date", "Document Date", "Document No.", "Fund Code", "Department Code", "Project Code", "Year Code", "Appeal Code", "Bal. Account No.", "Document Type", "Account No.", "Account Type", "Description", "Bal. Account Type", "Amount", "Major Appeal Code"}),
+    #"Added Custom6" = Table.AddColumn(#"Reordered Columns9", "replaceCustom", each null),
+    #"Reordered Columns10" = Table.ReorderColumns(#"Added Custom6",{"Index", "Posting Date", "Document Date", "Document No.", "Fund Code", "Department Code", "Project Code", "Year Code", "Appeal Code", "Bal. Account No.", "Document Type", "replaceCustom", "Account No.", "Account Type", "Description", "Bal. Account Type", "Amount", "Major Appeal Code"}),
+    #"Removed Columns8" = Table.RemoveColumns(#"Reordered Columns10",{"Document Type"}),
+    #"Renamed Columns8" = Table.RenameColumns(#"Removed Columns8",{{"replaceCustom", "Document Type"}}),
+    #"Added Index" = Table.AddIndexColumn(#"Renamed Columns8", "Index.1", 0, 1, Int64.Type),
+    #"Reordered Columns11" = Table.ReorderColumns(#"Added Index",{"Index", "Index.1", "Posting Date", "Document Date", "Document No.", "Fund Code", "Department Code", "Project Code", "Year Code", "Appeal Code", "Bal. Account No.", "Document Type", "Account No.", "Account Type", "Description", "Bal. Account Type", "Amount", "Major Appeal Code"}),
+    #"Renamed Columns9" = Table.RenameColumns(#"Reordered Columns11",{{"Index.1", "Line No."}}),
+    #"Removed Columns9" = Table.RemoveColumns(#"Renamed Columns9",{"Index"}),
+    #"Reordered Columns12" = Table.ReorderColumns(#"Removed Columns9",{"Posting Date", "Amount", "Document Date", "Document No.", "Line No.", "Fund Code", "Department Code", "Project Code", "Year Code", "Appeal Code", "Bal. Account No.", "Document Type", "Account No.", "Account Type", "Description", "Bal. Account Type", "Major Appeal Code"}),
+    #"Duplicated Column2" = Table.AddColumn(#"Reordered Columns12", "External Document No.", each [#"Document No."], type number),
+    #"Reordered Columns13" = Table.ReorderColumns(#"Duplicated Column2",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Line No.", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+    #"Removed Columns10" = Table.RemoveColumns(#"Reordered Columns13",{"Gf_Batch_Number"}),
+    #"Added Custom7" = Table.AddColumn(#"Removed Columns10", "Break", each "null"),
+    #"Reordered Columns14" = Table.ReorderColumns(#"Added Custom7",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Line No.", "Break", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+    #"Duplicated Column3" = Table.DuplicateColumn(#"Reordered Columns14", "Document Type", "Document Type - Copy"),
+    #"Reordered Columns15" = Table.ReorderColumns(#"Duplicated Column3",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Line No.", "Break", "Document Type - Copy", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+    #"Removed Columns11" = Table.RemoveColumns(#"Reordered Columns15",{"Break"}),
+    #"Renamed Columns1" = Table.RenameColumns(#"Removed Columns11",{{"Document Type - Copy", "Currency"}})
+in
+    #"Renamed Columns1"
