@@ -41,7 +41,24 @@ let
     #"Inserted Replaced Text" = Table.AddColumn(#"Reordered Columns5", "Index", each Text.Replace(Text.From([Posting Date], "en-GB"), "/09/2025", "09251000"), type text),
     #"Reordered Columns6" = Table.ReorderColumns(#"Inserted Replaced Text",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Gf_Reference_number", "Gf_Gift_code", "Gf_NL_post_date", "Gf_Import_ID", "Gf_AttrCat_1_01_Description", "Gf_AttrCat_2_01_Description", "Gf_CnBio_ID", "Gf_CnBio_Name", "Gf_Fnds_1_01_Description", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Fn_Fund_type", "Gf_Apls_1_01_Appeal_ID", "Gf_Apls_1_01_Description", "Gf_Apls_1_01_Ap_Appeal_category", "Gf_Apls_1_01_ApAtrCat_1_01_Description", "Gf_Apls_1_01_ApAtrCat_2_01_Description"}),
     #"Inserted Text Before Delimiter" = Table.AddColumn(#"Reordered Columns6", "Project Code", each Text.BeforeDelimiter([Gf_Apls_1_01_Ap_Appeal_category], " "), type text),
-    #"Inserted Text Range" = Table.AddColumn(#"Inserted Text Before Delimiter", "Appeal Code", each Text.Middle([Gf_Apls_1_01_Appeal_ID], 2, 4), type text),
+    #"Inserted Text Range" =
+    Table.AddColumn(
+        #"Inserted Text Before Delimiter",
+        "Appeal Code",
+        each
+            let
+                txt = [Gf_Apls_1_01_Appeal_ID],
+                firstLetterPos =
+                    List.PositionOfAny(
+                        Text.ToList(txt),
+                        {"A".."Z"}
+                    )
+            in
+                if firstLetterPos <> -1
+                then Text.Middle(txt, firstLetterPos, 4)
+                else null,
+        type text
+    ),
     #"Merged Queries" = Table.NestedJoin(#"Inserted Text Range", {"Gf_Fnds_1_01_Fn_Fund_category"}, #"Fund-PQ", {"RE Data Export Name"}, "Fund-PQ", JoinKind.LeftOuter),
     #"Expanded Fund-PQ" = Table.ExpandTableColumn(#"Merged Queries", "Fund-PQ", {"BC Fund"}, {"Fund-PQ.BC Fund"}),
     #"Removed Columns6" = Table.RemoveColumns(#"Expanded Fund-PQ",{"Gf_Fnds_1_01_Fn_Fund_type", "Gf_Fnds_1_01_Fn_Fund_category", "Gf_Fnds_1_01_Description"}),
