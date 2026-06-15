@@ -1,0 +1,714 @@
+# Mosaic Trading P&P – Developer Handover (Annotated Query Guide)
+
+This document is a **developer handover guide** for the **Mosaic Trading P&P** journal model.
+
+It covers the following queries:
+
+1. **`MT-Journals`**
+2. **`MT P&P (income)`**
+3. **`MT MERCH (income)`**
+4. **`MT_Bank_Line`**
+
+For each query, this guide explains:
+
+- **What the query does**
+- **How the logic flows**
+- **Which derived fields matter most**
+- **Where the risky or confusing logic is**
+- **What to check if the model starts mismatching**
+
+---
+
+# 1. Overall purpose of the Mosaic Trading P&P model
+
+At a high level, this model builds a Business Central-ready journal for **Mosaic Trading-related income**, combining:
+
+- **Postage & Packaging income** (`MT P&P (income)`)
+- **Merchandise income** (`MT MERCH (income)`)
+- **Bank-side balancing lines** (`MT_Bank_Line`)
+
+Those three queries are then appended together in **`MT-Journals`** and shaped into the final journal layout.
+
+---
+
+# 2. High-level data flow
+
+```text
+Table2 source (RE Data)
+├─ MT P&P (income)
+├─ MT MERCH (income)
+└─ MT_Bank_Line (from BS-PQ)
+        ↓
+     MT-Journals
+        ↓
+Final Business Central-ready journal
+```
+
+---
+
+# 3. Query: `MT-Journals`
+
+## Purpose
+This is the **final assembly query**. It combines the output of the income-side queries and the bank-side query, adds a line number, and shapes the output order.
+
+---
+
+## Code
+
+```m
+let
+    Source = Table.Combine({#"MT P&P (income)", #"MT MERCH (income)", MT_Bank_Line}),
+    #"Changed Type" = Table.TransformColumnTypes(Source,{{"Posting Date", type date}, {"Document Date", type date}}),
+    #"Added Index" = Table.AddIndexColumn(#"Changed Type", "Index", 1, 1, Int64.Type),
+    #"Reordered Columns" = Table.ReorderColumns(#"Added Index",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+    #"Duplicated Column" = Table.DuplicateColumn(#"Reordered Columns", "Document Type", "Document Type - Copy"),
+    #"Reordered Columns1" = Table.ReorderColumns(#"Duplicated Column",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Document Type - Copy", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+    #"Renamed Columns" = Table.RenameColumns(#"Reordered Columns1",{{"Document Type - Copy", "Currency"}})
+in
+    #"Renamed Columns"
+```
+
+---
+
+## What it does
+
+### 1. Appends the three component queries
+```m
+Table.Combine({#"MT P&P (income)", #"MT MERCH (income)", MT_Bank_Line})
+```
+This stacks all rows from the three source queries into one final journal dataset.
+
+### 2. Re-types the two main date columns
+```m
+{"Posting Date", type date}, {"Document Date", type date}
+```
+This ensures the final output has consistent date typing.
+
+### 3. Adds a line number index
+```m
+Table.AddIndexColumn(..., "Index", 1, 1, Int64.Type)
+```
+This creates a 1-based sequential line number for the journal.
+
+### 4. Reorders columns into final BC-style layout
+The query then arranges the final output schema.
+
+### 5. Copies `Document Type` into `Currency`
+```m
+Table.DuplicateColumn(..., "Document Type", "Document Type - Copy")
+```
+then renames the duplicate to:
+```m
+"Currency"
+```
+
+---
+
+## Why it matters
+This query is simple compared with the income queries, but it is the **single point where schema must align**.
+
+If one upstream query changes its columns, this query is where the append or reorder will usually fail first.
+
+---
+
+## Key risks / gotchas
+
+### 1. `Currency` is copied from `Document Type`
+This is a design shortcut.
+If `Document Type` is null in upstream rows, `Currency` will also become null.
+
+### 2. `Index` is really `Line No.` in practice
+The field is named `Index`, not `Line No.`. If users expect BC-style `Line No.`, that may be worth renaming later.
+
+### 3. Append assumes all three queries share the same logical schema
+This is usually where hidden schema drift surfaces.
+
+---
+
+# 4. Query: `MT P&P (income)`
+
+## Purpose
+This query builds the **Postage & Packaging income** side of the Mosaic Trading journal.
+
+It:
+- filters only rows with `Postage & Packaging Description`
+- derives BC dimensions and accounts
+- maps posting date using `Bank_Date_Helper`
+- groups rows
+- calculates the grouped income amount
+- reshapes the output into final journal format
+
+---
+
+## High-level flow
+
+```text
+Table2 source
+→ keep only P&P rows
+→ type and clean source columns
+→ derive dimensions (project / year / appeal / department)
+→ map account via VAT-PQ
+→ assign posting date via Bank_Date_Helper
+→ use Postage & Packaging Description as Amount
+→ group rows
+→ sum grouped amount
+→ keep representative row values
+→ reshape final journal output
+```
+
+---
+
+## Block-by-block explanation
+
+### Block 1 – Load source and filter to P&P rows
+
+```m
+Source = Excel.CurrentWorkbook(){[Name="Table2"]}[Content],
+
+#"Filtered Rows" = Table.SelectRows(
+    Source,
+    each [#"Postage & Packaging Description"] <> null),
+```
+
+#### What it does
+Loads `Table2` and keeps only rows where **`Postage & Packaging Description` is not null**.
+
+#### Why it matters
+This is how the query identifies which rows belong to the P&P journal stream.
+
+#### Risks / gotchas
+
+- If valid P&P rows sometimes have blank/null descriptions, they will be dropped.
+- This means the source relies on that description field being the business identifier for P&P.
+
+---
+
+### Block 2 – Type source columns
+
+```m
+#"Changed Type" = Table.TransformColumnTypes(...)
+```
+
+#### What it does
+Assigns data types to all core source columns, including:
+
+- dates
+- numbers
+- marketing source code
+- IDs
+
+#### Why it matters
+Required so later text parsing, joins, and sums work consistently.
+
+#### Risks / gotchas
+
+- Some fields are typed as `Int64.Type`, which can fail if later source data becomes mixed-format.
+- If leading zeros matter anywhere, numeric typing may remove them.
+
+---
+
+### Block 3 – Basic renames and department lookup
+
+```m
+#"Changed Type1" = Table.TransformColumnTypes(#"Removed Columns",{{"Gift Date", type date}, {"NL post date", type date}}),
+#"Renamed Columns" = Table.RenameColumns(#"Changed Type1",{{"Gift Date", "Posting date"}}),
+#"Renamed Columns1" = Table.RenameColumns(#"Renamed Columns",{{"Reference", "Document No."}, {"Posting date", "Document Date"}}),
+```
+
+Then:
+
+```m
+#"Merged Queries" = Table.NestedJoin(#"Renamed Columns1", {"Department Code Description"}, #"DEP-PQ", {"RE data export name"}, "DEP-PQ", JoinKind.LeftOuter),
+#"Expanded DEP-PQ" = Table.ExpandTableColumn(#"Merged Queries", "DEP-PQ", {"BC Department Code"}, {"DEP-PQ.BC Department Code"}),
+#"Renamed Columns2" = Table.RenameColumns(#"Expanded DEP-PQ",{{"DEP-PQ.BC Department Code", "Department Code"}}),
+```
+
+#### What it does
+- Renames `Gift Date` into a staging `Document Date`
+- Renames `Reference` into `Document No.`
+- Maps `Department Code Description` into `Department Code`
+
+#### Why it matters
+This starts the conversion from source-native RE fields to Business Central-style posting fields.
+
+#### Risks / gotchas
+- There is a naming hop where `Gift Date` becomes `Posting date`, then immediately becomes `Document Date`. This is functionally okay but not very readable.
+- Department code quality depends entirely on `DEP-PQ` key matching.
+
+---
+
+### Block 4 – Derive Project / Year / Appeal codes
+
+```m
+#"Inserted Text Before Delimiter" = Table.AddColumn(#"Renamed Columns2", "Project Code", each Text.BeforeDelimiter([Income Ref], " "), type text),
+#"Inserted Text Range" = Table.AddColumn(#"Inserted Text Before Delimiter", "Text Range", each Text.Middle([Appeal ID], 6, 2), type text),
+#"Added Conditional Column" = Table.AddColumn(#"Inserted Text Range", "Custom", each if [Text Range] = "00" then "NA" else [Text Range], type text),
+#"Renamed Columns3" = Table.RenameColumns(#"Added Conditional Column",{{"Custom", "Year Code"}}),
+#"Inserted Text Range1" = Table.AddColumn(#"Renamed Columns3", "Appeal Code", each Text.Middle([Appeal ID], 2, 4), type text),
+```
+
+#### What it does
+Derives:
+- `Project Code` from the first token in `Income Ref`
+- `Year Code` from characters 6–7 of `Appeal ID`
+- `Appeal Code` from characters 2–5 of `Appeal ID`
+
+#### Why it matters
+These are dimension fields used in grouping and final BC journal output.
+
+#### Risks / gotchas
+- All of these rely on strict source formatting.
+- If `Income Ref` has no space, `Text.BeforeDelimiter` may fail.
+- If `Appeal ID` format changes, codes can silently become wrong.
+
+---
+
+### Block 5 – Add account fields and VAT mapping
+
+```m
+#"Added Custom" = Table.AddColumn(#"Removed Columns5", "Bal. Account No.", each null),
+#"Inserted Literal" = Table.AddColumn(#"Added Custom", "Document Type", each "PAYMENT", type text),
+#"Added Custom1" = Table.AddColumn(#"Inserted Literal", "Major Appeal Code", each null),
+```
+
+Then:
+
+```m
+#"Merged Queries1" = Table.NestedJoin(#"Added Custom1", {"Gift subtype"}, #"VAT-PQ", {"Gift Subtype"}, "VAT-PQ", JoinKind.LeftOuter),
+#"Expanded VAT-PQ" = Table.ExpandTableColumn(#"Merged Queries1", "VAT-PQ", {"BC Destination Code"}, {"VAT-PQ.BC Destination Code"}),
+#"Renamed Columns5_1" = Table.RenameColumns(#"Expanded VAT-PQ",{{"VAT-PQ.BC Destination Code", "Account No."}}),
+```
+
+#### What it does
+- Adds placeholder balancing fields
+- Sets `Document Type = PAYMENT`
+- Looks up `Account No.` from `VAT-PQ` using `Gift subtype`
+
+#### Why it matters
+This is the main account-mapping step for P&P income rows.
+
+#### Risks / gotchas
+- `Gift subtype` should ideally be cleaned/normalised before this join, but in this query it is not explicitly standardised like in your Addition query.
+- `Document Type` is later overwritten to null, so its current value is temporary.
+
+---
+
+### Block 6 – Build interim Description and assign Posting Date from helper
+
+```m
+#"Added Custom3" = Table.AddColumn(#"Removed Columns6", "dESCRIPTION", each Bank_Date_Helper[JG Prefix]{0}),
+#"Inserted Merged Column" = Table.AddColumn(#"Added Custom3", "Description", each Text.Combine({[dESCRIPTION], " - ", Text.From([Marketing Source Code], "en-GB")}), type text),
+#"Removed Columns1_1" = Table.RemoveColumns(#"Inserted Merged Column",{"dESCRIPTION", "Marketing Source Code", "Reference number", "Data Collection Source Description"}),
+#"Added Custom4" = Table.AddColumn(#"Removed Columns1_1", "Posting Date", each Bank_Date_Helper[Date]{0}),
+```
+
+#### What it does
+- Pulls a prefix from `Bank_Date_Helper`
+- Builds an interim `Description`
+- Sets a default `Posting Date` from `Bank_Date_Helper[Date]{0}`
+
+#### Why it matters
+This is where the query starts taking logic from the helper table rather than source gift data.
+
+#### Risks / gotchas
+- `Bank_Date_Helper[Date]{0}` means “take the first row’s date”, which is fragile if the helper table is not exactly the structure expected.
+- The interim description is later replaced again.
+
+---
+
+### Block 7 – Override Posting Date based on paying-in-slip match
+
+```m
+#"Merged Queries4" = Table.NestedJoin(#"Reordered Columns", {"Paying In Slip Number Description"}, Bank_Date_Helper, {"Narrative #1"}, "Bank_Date_Helper", JoinKind.LeftOuter),
+#"Expanded Bank_Date_Helper" = Table.ExpandTableColumn(#"Merged Queries4", "Bank_Date_Helper", {"Date"}, {"Bank_Date_Helper.Date"}),
+#"Removed Columns12" = Table.RemoveColumns(#"Reordered Columns12",{"Posting Date"}),
+#"Renamed Columns20" = Table.RenameColumns(#"Removed Columns12",{{"Bank_Date_Helper.Date", "Posting Date"}}),
+```
+
+#### What it does
+Replaces the default posting date with a more specific posting date looked up by:
+
+- source key: `Paying In Slip Number Description`
+- helper key: `Bank_Date_Helper[Narrative #1]`
+
+#### Why it matters
+This is the real posting-date logic that should align journal rows to bank/helper narrative mapping.
+
+#### Risks / gotchas
+- If the paying-in-slip reference does not match helper narrative, `Posting Date` becomes null.
+- This is one of the most likely real-world mismatch points.
+
+---
+
+### Block 8 – P&P amount logic
+
+```m
+#"Renamed Columns4" = Table.RenameColumns(#"Changed Type2",{{"Gf_Receipt_amount", "Amount"}, {"Donation Collection Fees Description", "Fees"}}),
+```
+
+Then later:
+
+```m
+#"Removed Columns2" = Table.RemoveColumns(#"Added Custom Column",{
+    "Fees", "Amount", "Gift Amount", "Column1", "Custom"
+}),
+
+#"Renamed Columns8" = Table.RenameColumns(#"Removed Columns2",{{"Postage & Packaging Description", "Amount"}}),
+```
+
+#### What it does
+This is important:
+- the query temporarily renames `Gf_Receipt_amount` to `Amount`
+- but later removes that `Amount`
+- then **renames `Postage & Packaging Description` to `Amount`**
+
+#### Why it matters
+This means the **final income amount is actually sourced from `Postage & Packaging Description`**, not `Gf_Receipt_amount` or `Gift Amount`.
+
+#### Risks / gotchas
+- This is probably the single most important logic point in the whole query.
+- If `Postage & Packaging Description` is a text-like or mixed field rather than a clean numeric value, this could create mismatches or implicit coercion issues.
+- It can also be confusing, because earlier steps appear to suggest other amount fields matter more.
+
+---
+
+### Block 9 – Group rows and sum amount
+
+```m
+#"Grouped Rows" = Table.Group(
+    #"Renamed Columns8",
+    {
+        "Posting Date",
+        "Document Date",
+        "Document No.",
+        "Project Code",
+        "Year Code",
+        "Appeal Code",
+        "Department Code"
+    },
+    {
+        {"All", each _, type table [...]}
+    }
+),
+
+#"Added Custom10" = Table.AddColumn(#"Grouped Rows", "Custom", each List.Sum([All][Amount])),
+#"Added Custom11" = Table.AddColumn(#"Added Custom10", "Custom.1", each Table.FirstN([All], 1)),
+```
+
+#### What it does
+- Groups rows by date/document/dimensions
+- Sums grouped `Amount`
+- Keeps the first row in each group as a template row for static values
+
+#### Why it matters
+This is the main aggregation logic for P&P income.
+
+#### Risks / gotchas
+- Any grouped field omitted here may cause rows to combine when they should remain separate.
+- The first-row template pattern means some fields come from the first underlying row, not from a controlled aggregation rule.
+
+---
+
+### Block 10 – Final reshaping and field overwrites
+
+This section is long, but the most important behaviours are:
+
+#### A. Amount is multiplied by `-1`
+```m
+#"Multiplied Column" = Table.TransformColumns(#"Removed Columns7", {{"Custom", each _ * -1, type number}})
+```
+So grouped P&P income is output as **negative**.
+
+#### B. External document number is created by duplicating `Document No.`
+This is standard.
+
+#### C. `Document Type` is reset to null
+```m
+#"Added Custom13" = Table.AddColumn(#"Renamed Columns16", "Document Type", each null)
+```
+So the earlier `PAYMENT` does **not** survive to the final output.
+
+#### D. `Major Appeal Code` is mapped via `MA - PQ`
+```m
+#"Merged Queries3" = Table.NestedJoin(#"Renamed Columns17", {"Major Appeal Code"}, #"MA - PQ", {"RE Data Export Name"}, "MA - PQ", JoinKind.LeftOuter)
+```
+But note: before that point, `Major Appeal Code` was null.
+So this mapping may often produce null unless upstream data has been changed.
+
+#### E. `Description` is overwritten
+First:
+```m
+"Description" = "MT P&P - " & Text.From([Document Date], "en-GB")
+```
+Then `Document No.` is overwritten as:
+```m
+"MT - " & Text.From([Posting Date], "en-GB")
+```
+
+#### Why it matters
+The final visible output is **not the same as the earlier descriptive staging logic**.
+
+#### Risks / gotchas
+- Several earlier fields are only staging fields and do not survive to the final output.
+- This is easy to miss when debugging.
+
+---
+
+## Plain-English summary of `MT P&P (income)`
+
+> This query filters Table2 to P&P rows, derives BC dimensions and account codes, assigns posting dates from `Bank_Date_Helper`, uses `Postage & Packaging Description` as the final amount source, groups rows, then outputs a negative-value journal line set with standard BC columns.
+
+---
+
+# 5. Query: `MT MERCH (income)`
+
+## Purpose
+This query builds the **Merchandise income** side of the Mosaic Trading journal.
+
+Compared with the P&P query, this one is slightly simpler because it does not replace the amount with `Postage & Packaging Description`. Instead, it groups `Gift Amount` into income totals.
+
+---
+
+## High-level flow
+
+```text
+Table2 source
+→ type and shape source fields
+→ derive dimensions / account / department
+→ assign posting date via Bank_Date_Helper
+→ group merchandise income
+→ use Gift Amount as grouped amount
+→ generate final document no./description
+→ output BC-shaped rows
+```
+
+---
+
+## Main logic points
+
+### 1. Source typing / dimension derivation / VAT mapping
+This is very similar to the P&P query:
+- department from `DEP-PQ`
+- project/year/appeal from text parsing
+- account from `VAT-PQ`
+
+### 2. Posting Date comes from `Bank_Date_Helper`
+```m
+#"Merged Queries2" = Table.NestedJoin(#"Reordered Columns1", {"Paying In Slip Number Description"}, Bank_Date_Helper, {"Narrative #1"}, "Bank_Date_Helper", JoinKind.LeftOuter)
+```
+Again, very dependent on helper match quality.
+
+### 3. Grouping uses `Gift Amount`
+```m
+#"Grouped Rows" = Table.Group(
+    #"Renamed Columns4",
+    {"Account No.", "Project Code", "Appeal Code", "Department Code", "Year Code", "Paying In Slip Number Description", "Document Date", "Major Appeal Code", "Fund ID"},
+    {
+        {"Gross_Income", each List.Sum([Gift Amount]), type nullable number},
+        {"Fees_Sum", each List.Sum([Fees]), type nullable number}
+    }
+)
+```
+Then:
+```m
+#"Renamed Columns6" = Table.RenameColumns(#"Grouped Rows",{{"Gross_Income", "Amount"}})
+```
+So unlike P&P, this query’s final amount comes from grouped **`Gift Amount`**.
+
+### 4. Fees are grouped but removed
+```m
+#"Removed Columns2" = Table.RemoveColumns(#"Renamed Columns6",{"Fees_Sum"})
+```
+So fees are calculated at grouping stage but **not used in final output**.
+
+### 5. Amount is multiplied by `-1`
+```m
+#"Multiplied Column" = Table.TransformColumns(#"Changed Type3", {{"Amount", each _ * -1, type number}})
+```
+So merchandise income is also output as negative.
+
+### 6. Final balancing fields are set in an unusual way
+The query does this sequence:
+- duplicate `Document Type` (which is null) into `Bal. Account No.`
+- duplicate that into `Bal. Account Type`
+- later replace one with `BANK ACCOUNT`
+- then rename the other back/forth
+
+Eventually it lands on:
+- `Bal. Account Type = BANK ACCOUNT`
+- `Bal. Account No. = null`
+
+This works, but it is a very UI-generated / cluttered way to get there.
+
+### 7. Description is overwritten twice
+First:
+```m
+"Merchandise Income - " & [Description]
+```
+Then later:
+```m
+"Merch Income - " & Text.From([Posting Date], "en-GB")
+```
+So again, earlier description logic is staging logic only.
+
+---
+
+## Key risks / gotchas in `MT MERCH (income)`
+
+### 1. Posting Date depends on `Bank_Date_Helper`
+This is probably the biggest real-life mismatch point.
+
+### 2. Fees are grouped but discarded
+This is not necessarily wrong, but it means users might ask why fee fields are present earlier but absent later.
+
+### 3. Overcomplicated balancing-field construction
+This makes the query harder to maintain than it needs to be.
+
+### 4. Merchandise amount logic differs from P&P amount logic
+- P&P uses `Postage & Packaging Description` as final amount source
+- Merch uses grouped `Gift Amount`
+
+This difference is important and should be explicitly remembered.
+
+---
+
+## Plain-English summary of `MT MERCH (income)`
+
+> This query builds the merchandise-income side of the Mosaic journal by grouping `Gift Amount` across BC dimensions, assigning posting date from `Bank_Date_Helper`, outputting negative income journal rows, and shaping them into the final BC schema.
+
+---
+
+# 6. Query: `MT_Bank_Line`
+
+## Purpose
+This query creates the **bank-side balancing rows** from `BS-PQ`.
+
+---
+
+## Code summary
+
+```m
+Source = Table.SelectColumns(#"BS-PQ", {"Date", "Narrative #1", "Narrative #2", "Narrative #3", "Bank Amount"}, MissingField.UseNull)
+```
+This loads only the bank-relevant fields.
+
+Then it adds a record column called `BankLine` with values such as:
+- Posting Date = Date
+- Document Date = Date
+- Document No. = `MT - dd/MM/yyyy`
+- Account No. = `46556729 MAIN`
+- Account Type = `Bank Account`
+- Amount = `Bank Amount`
+- Description = concatenated narrative text + date
+
+Finally it expands that record and renames:
+- `Major Appeal` → `Major Appeal Code`
+
+---
+
+## Why it matters
+This is the bank-side half of the full journal and is the balancing layer that complements income lines.
+
+---
+
+## Key risks / gotchas
+
+### 1. Hardcoded account number
+```m
+"46556729 MAIN"
+```
+If the bank account changes, this must be updated manually.
+
+### 2. Narrative-driven description
+Descriptions are built from `Narrative #1/#2/#3` plus date. That is good for traceability, but changes in raw bank narrative formatting will change output descriptions directly.
+
+### 3. Balancing fields are mostly null
+This is fine as long as downstream output expects bank rows to be represented as their own lines rather than via populated balancing columns.
+
+---
+
+## Plain-English summary of `MT_Bank_Line`
+
+> This query turns bank statement rows from `BS-PQ` into journal-ready bank lines, posting directly to account `46556729 MAIN` with a descriptive narrative built from the bank statement text.
+
+---
+
+# 7. Most likely real-life mismatch points in this model
+
+If I had to highlight the **main real-life mismatch risks** for Mosaic Trading P&P, they would be these:
+
+## 1. Posting date dependency on `Bank_Date_Helper`
+Both income queries rely heavily on matching narrative/paying-in-slip text to `Bank_Date_Helper`.
+If that match fails, posting dates can go null or drift.
+
+## 2. P&P amount source is non-obvious
+In `MT P&P (income)`, the final `Amount` comes from **`Postage & Packaging Description`**, not the standard amount fields.
+This is easy to misunderstand and is the biggest logic quirk in the P&P query.
+
+## 3. Grouping uses representative first-row values
+The grouped queries keep one row from `All` to supply static fields. If grouped rows contain mixed values in fields you are not grouping by, the first-row pattern can silently hide differences.
+
+## 4. Document Type is temporary in both income queries
+It is initially set to `PAYMENT`, but does not survive to the final output.
+So if users/searchers inspect only mid-query steps, they may think Document Type is populated when it actually ends null.
+
+## 5. Currency is derived from Document Type in `MT-Journals`
+If Document Type ends null upstream, Currency also ends null.
+
+## 6. Major Appeal Code mapping in P&P may often be empty
+Because `Major Appeal Code` is initially null and only later mapped through `MA - PQ`, the final result depends on whether that join is actually meaningful with the available values.
+
+---
+
+# 8. Suggested checks if the model starts going wrong
+
+## Check 1 – Posting Date exception rows
+Create a query showing rows where posting date is null after the `Bank_Date_Helper` merge.
+
+## Check 2 – P&P amount validation
+Compare for `MT P&P (income)`:
+- `Gift Amount`
+- `Gf_Receipt_amount`
+- `Postage & Packaging Description`
+- final grouped `Amount`
+
+This will quickly prove whether the model is using the intended value.
+
+## Check 3 – Rows with helper narrative mismatch
+List values of:
+- `Paying In Slip Number Description`
+- matched `Bank_Date_Helper[Narrative #1]`
+- resulting `Posting Date`
+
+## Check 4 – Grouping compression check
+Compare:
+- source row count
+- grouped row count
+- largest grouped buckets
+
+This helps identify over-aggregation.
+
+## Check 5 – Bank balancing check
+Validate that:
+
+```text
+Sum(MT P&P income) + Sum(MT Merch income) + Sum(MT_Bank_Line) = expected net balance
+```
+
+---
+
+# 9. Developer summary
+
+> The Mosaic Trading P&P model builds a final journal by combining two income streams (`MT P&P (income)` and `MT MERCH (income)`) with bank balancing rows (`MT_Bank_Line`), then shaping the result in `MT-Journals` for Business Central import.
+
+---
+
+# 10. Recommended handover note
+
+If future-you or another developer has to troubleshoot this model, check these first:
+
+1. **Whether `Bank_Date_Helper` matches are producing valid posting dates**
+2. **Whether `MT P&P (income)` is intentionally using `Postage & Packaging Description` as Amount**
+3. **Whether grouping keys are too broad or too narrow**
+4. **Whether upstream lookup queries (`DEP-PQ`, `VAT-PQ`, `MA - PQ`) still align with source values**
+5. **Whether the appended outputs still share the same schema before `MT-Journals` combines them**
