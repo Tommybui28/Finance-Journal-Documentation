@@ -38,9 +38,9 @@ Table2 source (RE Data)
 ├─ MT P&P (income)
 ├─ MT MERCH (income)
 └─ MT_Bank_Line (from BS-PQ)
-        ↓
-     MT-Journals
-        ↓
+↓
+MT-Journals
+↓
 Final Business Central-ready journal
 ```
 
@@ -57,15 +57,15 @@ This is the **final assembly query**. It combines the output of the income-side 
 
 ```m
 let
-    Source = Table.Combine({#"MT P&P (income)", #"MT MERCH (income)", MT_Bank_Line}),
-    #"Changed Type" = Table.TransformColumnTypes(Source,{{"Posting Date", type date}, {"Document Date", type date}}),
-    #"Added Index" = Table.AddIndexColumn(#"Changed Type", "Index", 1, 1, Int64.Type),
-    #"Reordered Columns" = Table.ReorderColumns(#"Added Index",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
-    #"Duplicated Column" = Table.DuplicateColumn(#"Reordered Columns", "Document Type", "Document Type - Copy"),
-    #"Reordered Columns1" = Table.ReorderColumns(#"Duplicated Column",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Document Type - Copy", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
-    #"Renamed Columns" = Table.RenameColumns(#"Reordered Columns1",{{"Document Type - Copy", "Currency"}})
+Source = Table.Combine({#"MT P&P (income)", #"MT MERCH (income)", MT_Bank_Line}),
+#"Changed Type" = Table.TransformColumnTypes(Source,{{"Posting Date", type date}, {"Document Date", type date}}),
+#"Added Index" = Table.AddIndexColumn(#"Changed Type", "Index", 1, 1, Int64.Type),
+#"Reordered Columns" = Table.ReorderColumns(#"Added Index",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+#"Duplicated Column" = Table.DuplicateColumn(#"Reordered Columns", "Document Type", "Document Type - Copy"),
+#"Reordered Columns1" = Table.ReorderColumns(#"Duplicated Column",{"Posting Date", "Amount", "Document Date", "Document No.", "External Document No.", "Index", "Document Type - Copy", "Project Code", "Appeal Code", "Fund Code", "Year Code", "Document Type", "Department Code", "Account No.", "Bal. Account No.", "Bal. Account Type", "Account Type", "Description", "Major Appeal Code"}),
+#"Renamed Columns" = Table.RenameColumns(#"Reordered Columns1",{{"Document Type - Copy", "Currency"}})
 in
-    #"Renamed Columns"
+#"Renamed Columns"
 ```
 
 ---
@@ -166,8 +166,8 @@ Table2 source
 Source = Excel.CurrentWorkbook(){[Name="Table2"]}[Content],
 
 #"Filtered Rows" = Table.SelectRows(
-    Source,
-    each [#"Postage & Packaging Description"] <> null),
+Source,
+each [#"Postage & Packaging Description"] <> null),
 ```
 
 #### What it does
@@ -350,7 +350,7 @@ Then later:
 
 ```m
 #"Removed Columns2" = Table.RemoveColumns(#"Added Custom Column",{
-    "Fees", "Amount", "Gift Amount", "Column1", "Custom"
+"Fees", "Amount", "Gift Amount", "Column1", "Custom"
 }),
 
 #"Renamed Columns8" = Table.RenameColumns(#"Removed Columns2",{{"Postage & Packaging Description", "Amount"}}),
@@ -376,19 +376,19 @@ This means the **final income amount is actually sourced from `Postage & Packagi
 
 ```m
 #"Grouped Rows" = Table.Group(
-    #"Renamed Columns8",
-    {
-        "Posting Date",
-        "Document Date",
-        "Document No.",
-        "Project Code",
-        "Year Code",
-        "Appeal Code",
-        "Department Code"
-    },
-    {
-        {"All", each _, type table [...]}
-    }
+#"Renamed Columns8",
+{
+"Posting Date",
+"Document Date",
+"Document No.",
+"Project Code",
+"Year Code",
+"Appeal Code",
+"Department Code"
+},
+{
+{"All", each _, type table [...]}
+}
 ),
 
 #"Added Custom10" = Table.AddColumn(#"Grouped Rows", "Custom", each List.Sum([All][Amount])),
@@ -501,12 +501,12 @@ Again, very dependent on helper match quality.
 ### 3. Grouping uses `Gift Amount`
 ```m
 #"Grouped Rows" = Table.Group(
-    #"Renamed Columns4",
-    {"Account No.", "Project Code", "Appeal Code", "Department Code", "Year Code", "Paying In Slip Number Description", "Document Date", "Major Appeal Code", "Fund ID"},
-    {
-        {"Gross_Income", each List.Sum([Gift Amount]), type nullable number},
-        {"Fees_Sum", each List.Sum([Fees]), type nullable number}
-    }
+#"Renamed Columns4",
+{"Account No.", "Project Code", "Appeal Code", "Department Code", "Year Code", "Paying In Slip Number Description", "Document Date", "Major Appeal Code", "Fund ID"},
+{
+{"Gross_Income", each List.Sum([Gift Amount]), type nullable number},
+{"Fees_Sum", each List.Sum([Fees]), type nullable number}
+}
 )
 ```
 Then:
