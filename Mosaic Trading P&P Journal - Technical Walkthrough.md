@@ -2,6 +2,8 @@
 
 This document is a **developer handover guide** for the **Mosaic Trading P&P** journal model.
 
+Category: many:many relationships (multiple bank, income and fee lines)
+
 It covers the following queries:
 
 1. **`MT-Journals`**
