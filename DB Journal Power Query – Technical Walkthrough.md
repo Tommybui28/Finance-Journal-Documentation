@@ -1,5 +1,8 @@
 # DB Journal Power Query – Developer Handover (Block-by-Block Annotation)
 
+Category:
+1:1 relationship (single bank, single income line)
+
 This document is a **developer handover guide** for the **`DB Journal`** Power Query.
 
 It explains the query **block by block**, with each section showing:
