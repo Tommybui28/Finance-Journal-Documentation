@@ -2,6 +2,8 @@
 
 This document is a **developer handover guide** for the **Addition journal** Power Query.
 
+Category: 1:many with fees (single bank, multiple income grouped and fee lines grouped)
+
 It explains the query **block by block**, with each section showing:
 
 - **Code block** – the relevant M code
